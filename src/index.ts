@@ -23,30 +23,51 @@ export function apply(ctx: Context, cfg: Config) {
   var isstarted = false;
   const current = {
     question: {},
+    players: {},
     score: {},
     hint_time: 0,
+    quesNames: [],
+    quesOrder: [],
+    currentQues: 0,
 
     async init() {
       this.question = {};
       this.score = {};
       this.hint_time = 0;
+      this.currentQues = 0;
     },
 
+    async newGame(session: Session) {
+      this.init();
+      session.cancelQueued();
+      this.quesNames = JSON.parse(
+        (await ctx.localstorage.getItem("anime_master/questions")) || "[]"
+      );
+      if (this.quesNames.length == 0) {
+        await session.sendQueued("题库里没有题哦，快去出题吧");
+        return { code: false, msg: "空题库" };
+      }
+      this.quesOrder = getRandomArr(this.quesNames.length);
+      console.info(this.quesNames);
+      console.info(this.quesOrder);
+      isstarted = true;
+      this.newQues(this.quesNames[this.quesOrder[0]], session);
+    },
     async newQues(ques, session: Session) {
+      session.cancelQueued();
       this.question = anime_master.quesList[ques];
-      this.quesId = this.question.id;
+      this.hint_time = 0;
       const ques_img = path.join(
         ctx.baseDir,
         `data/anime_master/ques/${ques}.png`
       );
-      await session.send(h("image", { url: "file:///" + ques_img }));
+      await session.sendQueued(h("image", { url: "file:///" + ques_img }));
       console.info(this.question);
     },
 
     async checkInput(session: Session) {
       const message = session.content.replace(/<at id="[^"]+"\/>/, "").trim();
       if (message == this.question.name) {
-        isstarted = false;
         await session.sendQueued("回答正确");
         await session.sendQueued(
           h("image", {
@@ -58,11 +79,10 @@ export function apply(ctx: Context, cfg: Config) {
               ),
           })
         );
-      }
-      if (message == "hint" || message == "提示") {
+        await this.nextOrEnd(session);
+      } else if (message == "hint" || message == "提示") {
         this.hint_time++;
         if (this.hint_time == 4) {
-          isstarted = false;
           await session.sendQueued(`答案是:${this.question.name}`);
           await session.sendQueued(
             h("image", {
@@ -75,9 +95,21 @@ export function apply(ctx: Context, cfg: Config) {
             })
           );
           await session.sendQueued("你真菜");
+          await this.nextOrEnd(session);
         } else {
           await session.sendQueued(this.question[`hint_${this.hint_time}`]);
         }
+      } else {
+        await session.sendQueued("答案不对哦");
+      }
+    },
+    async nextOrEnd(session: Session) {
+      this.currentQues++;
+      if (this.currentQues == this.quesOrder.length) {
+        isstarted = false;
+        session.sendQueued("游戏结束");
+      } else {
+        this.newQues(this.quesNames[this.quesOrder[this.currentQues]], session);
       }
     },
   };
@@ -197,6 +229,20 @@ export function apply(ctx: Context, cfg: Config) {
       return { code: true, msg: "成功" };
     },
   };
+  function getRandomArr(num: number): number[] {
+    var array: number[] = new Array();
+
+    var i: number;
+    for (i = 0; i < num; i++) {
+      array[i] = i;
+    }
+    // 打乱数组顺序
+    array.sort(function () {
+      return 0.5 - Math.random();
+    });
+
+    return array;
+  }
 
   ctx.on("ready", () => {
     anime_master.initUserList();
@@ -209,12 +255,11 @@ export function apply(ctx: Context, cfg: Config) {
         return "测试已开始";
       }
       isstarted = true;
-      console.info(session.event.user);
-      if (session.guildId) {
-        console.info(session.guildId);
-      }
 
       await session.sendQueued("测试开始");
+
+      anime_master.initQuesList();
+      current.newGame(session);
     }
     if (mode == "结束") {
       if (isstarted == false) {
@@ -354,8 +399,7 @@ export function apply(ctx: Context, cfg: Config) {
   });
 
   ctx.command("anime.test").action(async ({ session }) => {
-    isstarted = true;
-    current.newQues("atri01", session);
+    current.newGame(session);
   });
 
   ctx.middleware(async (session, next) => {
