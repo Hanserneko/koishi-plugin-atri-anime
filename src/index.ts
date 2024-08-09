@@ -360,9 +360,14 @@ export function apply(ctx: Context, cfg: Config) {
 
   ctx.middleware(async (session, next) => {
     if (isstarted) {
-      return current.checkInput(session);
+      const message = session.content.replace(/<at id="[^"]+"\/>/, "").trim();
+      if (message.startsWith("anime")) {
+        return next();
+      } else {
+        return current.checkInput(session);
+      }
     } else {
       return next();
     }
-  });
+  }, true);
 }
