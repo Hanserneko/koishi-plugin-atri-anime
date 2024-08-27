@@ -1,0 +1,4 @@
+commands:
+  anime:
+    messages:
+      game-start: 游戏开始

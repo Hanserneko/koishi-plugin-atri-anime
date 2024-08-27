@@ -10,17 +10,30 @@ export const inject = ["localstorage"];
 
 export interface Config {
   defaultImageExtension: string;
+  defaultGameMinQues: number;
+  defaultGameMaxQues: number;
 }
 
 export const Config: Schema<Config> = Schema.object({
   defaultImageExtension: Schema.string()
     .description("默认图片保存后缀")
     .default("png"),
+  defaultGameMinQues: Schema.number()
+    .description("单局游戏最少问题数")
+    .default(3)
+    .min(1),
+  defaultGameMaxQues: Schema.number()
+    .description("单局游戏最多问题数")
+    .default(6)
+    .min(1),
+}).i18n({
+  "zh-CN": require("./locales/zh-CN"),
 });
 
 export function apply(ctx: Context, cfg: Config) {
   // write your plugin here
   var isstarted = false;
+  // 游戏内逻辑
   const current = {
     question: {},
     players: {},
@@ -30,6 +43,7 @@ export function apply(ctx: Context, cfg: Config) {
     quesOrder: [],
     currentQues: 0,
 
+    // 初始化游戏
     async init() {
       this.question = {};
       this.score = {};
@@ -37,6 +51,7 @@ export function apply(ctx: Context, cfg: Config) {
       this.currentQues = 0;
     },
 
+    //开启新游戏
     async newGame(session: Session) {
       this.init();
       session.cancelQueued();
@@ -47,12 +62,22 @@ export function apply(ctx: Context, cfg: Config) {
         await session.sendQueued("题库里没有题哦，快去出题吧");
         return { code: false, msg: "空题库" };
       }
-      this.quesOrder = getRandomArr(this.quesNames.length);
-      console.info(this.quesNames);
-      console.info(this.quesOrder);
+      if (this.quesNames.length < cfg.defaultGameMinQues) {
+        await session.sendQueued(
+          `题库中题目数量少于${cfg.defaultGameMinQues}个，无法开始，快去出题吧`
+        );
+        return { code: false, msg: "题目不足" };
+      }
+      await session.sendQueued("动漫达人游戏开始");
+      this.quesOrder = getRandomArr(
+        minNumber(this.quesNames.length, cfg.defaultGameMaxQues)
+      );
+      console.info("题目编号" + this.quesNames);
+      console.info("题目顺序" + this.quesOrder);
       isstarted = true;
       this.newQues(this.quesNames[this.quesOrder[0]], session);
     },
+
     async newQues(ques, session: Session) {
       session.cancelQueued();
       this.question = anime_master.quesList[ques];
@@ -61,14 +86,18 @@ export function apply(ctx: Context, cfg: Config) {
         ctx.baseDir,
         `data/anime_master/ques/${ques}.png`
       );
-      await session.sendQueued(h("image", { url: "file:///" + ques_img }));
+      await session.send(h("image", { url: "file:///" + ques_img }));
       console.info(this.question);
     },
 
     async checkInput(session: Session) {
+      session.cancelQueued(100);
       const message = session.content.replace(/<at id="[^"]+"\/>/, "").trim();
-      if (message == this.question.name) {
-        await session.sendQueued("回答正确");
+      if (
+        message == this.question.name ||
+        this.question.otherAnswers.includes(message)
+      ) {
+        await session.sendQueued("回答正确", 100);
         await session.sendQueued(
           h("image", {
             url:
@@ -79,8 +108,9 @@ export function apply(ctx: Context, cfg: Config) {
               ),
           })
         );
+
         await this.nextOrEnd(session);
-      } else if (message == "hint" || message == "提示") {
+      } else if (message == "hint" || message == "提示" || message == "不会") {
         this.hint_time++;
         if (this.hint_time == 4) {
           await session.sendQueued(`答案是:${this.question.name}`);
@@ -244,6 +274,14 @@ export function apply(ctx: Context, cfg: Config) {
     return array;
   }
 
+  function minNumber(num_A: number, num_B: number): number {
+    if (num_A < num_B) {
+      return num_A;
+    } else {
+      return num_B;
+    }
+  }
+
   ctx.on("ready", () => {
     anime_master.initUserList();
     anime_master.initQuesList();
@@ -255,7 +293,7 @@ export function apply(ctx: Context, cfg: Config) {
         return "测试已开始";
       }
       isstarted = true;
-
+      session.cancelQueued();
       await session.sendQueued("测试开始");
 
       anime_master.initQuesList();
@@ -350,22 +388,40 @@ export function apply(ctx: Context, cfg: Config) {
         return "time out";
       }
 
-      await session.sendQueued("请输入提示-1(角色特征或台词等)");
+      await session.sendQueued("请输入提示-1(建议:角色特征或台词等)");
       const hint_1 = await session.prompt();
       if (!hint_1) {
         return "time out";
       }
-      await session.sendQueued("请输入提示-2(角色登场作品等)");
+      await session.sendQueued("请输入提示-2(建议:角色登场作品等)");
       const hint_2 = await session.prompt();
       if (!hint_2) {
         return "time out";
       }
-      await session.sendQueued("请输入提示-3(角色名称提示等)");
+      await session.sendQueued("请输入提示-3(建议:角色名称提示等)");
       const hint_3 = await session.prompt();
       if (!hint_3) {
         return "time out";
       }
-
+      let otherAnswers: string[] = [];
+      await session.sendQueued(
+        "请输入其他被认为是正确答案的名字 可持续输入 发送“end”以结束输入"
+      );
+      while (true) {
+        const otherName = await session.prompt();
+        if (!otherName) {
+          return "time out";
+        }
+        if (otherName == "end") {
+          break;
+        }
+        if (otherAnswers.includes(otherName) || otherName == name) {
+          await session.sendQueued("已有该答案");
+          continue;
+        }
+        otherAnswers.push(otherName);
+        await session.sendQueued("答案记录成功");
+      }
       quesList[filename] = {
         name: name,
         id: filename,
@@ -373,7 +429,9 @@ export function apply(ctx: Context, cfg: Config) {
         hint_1: hint_1,
         hint_2: hint_2,
         hint_3: hint_3,
+        otherAnswers: otherAnswers,
       };
+      console.log(quesList);
       const save_ques = await anime_master.saveImage(
         ques,
         imageExtension,
@@ -395,11 +453,13 @@ export function apply(ctx: Context, cfg: Config) {
 
   ctx.command("anime.update").action(async ({ session }) => {
     anime_master.initUserList();
+    anime_master.initQuesList();
     await session.sendQueued("更新完成");
   });
 
   ctx.command("anime.test").action(async ({ session }) => {
-    current.newGame(session);
+    const ok = ["ok", "ooo"];
+    console.info([ok.toString()]);
   });
 
   ctx.middleware(async (session, next) => {
