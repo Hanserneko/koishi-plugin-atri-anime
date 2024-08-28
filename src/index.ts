@@ -6,18 +6,14 @@ import * as path from "path";
 
 export const name = "atri-anime";
 
-export const inject = ["localstorage"];
+export const inject = ["localstorage", "database"];
 
 export interface Config {
-  defaultImageExtension: string;
   defaultGameMinQues: number;
   defaultGameMaxQues: number;
 }
 
 export const Config: Schema<Config> = Schema.object({
-  defaultImageExtension: Schema.string()
-    .description("默认图片保存后缀")
-    .default("png"),
   defaultGameMinQues: Schema.number()
     .description("单局游戏最少问题数")
     .default(3)
@@ -30,9 +26,60 @@ export const Config: Schema<Config> = Schema.object({
   "zh-CN": require("./locales/zh-CN"),
 });
 
+declare module "koishi" {
+  interface Tables {
+    ani_master: ani_master;
+  }
+  interface Tables {
+    ani_mas_ques: ani_mas_ques;
+  }
+}
+export interface ani_master {
+  id: number;
+  userid: string;
+}
+export interface ani_mas_ques {
+  id: number;
+  qid: string;
+  name: string;
+  auther: string;
+  hint_1: string;
+  hint_2: string;
+  hint_3: string;
+  Other_ans: string[];
+  score: number;
+}
 export function apply(ctx: Context, cfg: Config) {
-  // write your plugin here
+  // ctx.model.extend(
+  //   "ani_master",
+  //   { id: "unsigned", userid: "string" },
+  //   {
+  //     autoInc: true,
+  //   }
+  // );
+
+  // 题库数据库实现
+  // ctx.model.extend(
+  //   "ani_mas_ques",
+  //   {
+  //     id: "unsigned",
+  //     qid: "string",
+  //     name: "string",
+  //     auther: "string",
+  //     hint_1: "string",
+  //     hint_2: "string",
+  //     hint_3: "string",
+  //     Other_ans: "list",
+  //     score: "integer",
+  //   },
+  //   { autoInc: true }
+  // );
+
+  // 日志输出
+  const logger = ctx.logger("ani-mas");
+
   var isstarted = false;
+
   // 游戏内逻辑
   const current = {
     question: {},
@@ -86,19 +133,22 @@ export function apply(ctx: Context, cfg: Config) {
         ctx.baseDir,
         `data/anime_master/ques/${ques}.png`
       );
-      await session.send(h("image", { url: "file:///" + ques_img }));
+      await session.sendQueued([
+        `这是一道分值为${this.question["score"] * 3}的题`,
+        h("image", { url: "file:///" + ques_img }),
+      ]);
       console.info(this.question);
     },
 
     async checkInput(session: Session) {
-      session.cancelQueued(100);
+      session.cancelQueued();
       const message = session.content.replace(/<at id="[^"]+"\/>/, "").trim();
       if (
         message == this.question.name ||
         this.question.otherAnswers.includes(message)
       ) {
-        await session.sendQueued("回答正确", 100);
-        await session.sendQueued(
+        await session.sendQueued([
+          "回答正确",
           h("image", {
             url:
               "file:///" +
@@ -106,9 +156,18 @@ export function apply(ctx: Context, cfg: Config) {
                 ctx.baseDir,
                 `data/anime_master/ans/${this.question.id}.png`
               ),
-          })
-        );
-
+          }),
+        ]);
+        await ctx.sleep(1000);
+        if (!this.players.hasOwnProperty(session.userId)) {
+          await session.sendQueued(
+            "啊欧 你好像没有加入游戏呢 下次开始游戏前加入才能得分哦"
+          );
+        } else if (session.userId == this.question["auther"]) {
+          await session.sendQueued(
+            "啊欧 你好像是出题人呢 自己答自己的题不会得分哦"
+          );
+        }
         await this.nextOrEnd(session);
       } else if (message == "hint" || message == "提示" || message == "不会") {
         this.hint_time++;
@@ -124,6 +183,7 @@ export function apply(ctx: Context, cfg: Config) {
                 ),
             })
           );
+          await ctx.sleep(1000);
           await session.sendQueued("你真菜");
           await this.nextOrEnd(session);
         } else {
@@ -133,14 +193,25 @@ export function apply(ctx: Context, cfg: Config) {
         await session.sendQueued("答案不对哦");
       }
     },
+
+    // 检测下一题或者结束游戏
     async nextOrEnd(session: Session) {
+      // 防止下一个消息提前发送
+      await ctx.sleep(1000);
       this.currentQues++;
       if (this.currentQues == this.quesOrder.length) {
         isstarted = false;
-        session.sendQueued("游戏结束");
+        this.finishGame(session);
       } else {
+        await session.sendQueued("进入下一题~");
         this.newQues(this.quesNames[this.quesOrder[this.currentQues]], session);
       }
+    },
+
+    async finishGame(session: Session) {
+      await session.sendQueued("游戏结束");
+      await session.sendQueued("排行榜暂未实现");
+      this.players = {};
     },
   };
   const anime_master = {
@@ -282,6 +353,7 @@ export function apply(ctx: Context, cfg: Config) {
     }
   }
 
+  // 插件启动时自动初始化
   ctx.on("ready", () => {
     anime_master.initUserList();
     anime_master.initQuesList();
@@ -308,148 +380,118 @@ export function apply(ctx: Context, cfg: Config) {
     }
   });
 
-  ctx.command("anime.up <data>").action(async ({ session }, data) => {
-    const id = session.event.user.id;
-    await ctx.localstorage.setItem(id, data);
-    await session.sendQueued("成功");
-  });
+  ctx.command("anime.出题").action(async ({ session }) => {
+    if (session.guildId) {
+      return "请通过私聊进行出题";
+    }
 
-  ctx.command("anime.out").action(async ({ session }) => {
-    const id = session.event.user.id;
-    const result = await ctx.localstorage.getItem(id);
-    console.info(result);
-    await session.sendQueued("数据:\n" + result);
-  });
+    await anime_master.initQuesList();
+    const imageExtension = "png";
+    const quesList = anime_master.quesList;
+    const user_id = session.event.user.id;
 
-  ctx.command("存数据 <str>").action(async ({ session }, str) => {
-    await ctx.localstorage.setItem("myData", str);
-    await session.sendQueued("存储成功");
-  });
+    await session.sendQueued("请输入问题编号");
+    let filename = await session.prompt();
+    if (!filename) {
+      return "time out";
+    }
+    console.info(anime_master.quesList);
 
-  ctx.command("取数据").action(async ({ session }) => {
-    const result = await ctx.localstorage.getItem("myData");
-    await session.sendQueued("数据为：\n" + result);
-  });
-
-  ctx.command("anime.注册").action(async ({ session }) => {
-    anime_master.checkAndCreateUserInfo(session.userId);
-    anime_master.userSetStore(session.userId);
-    session.sendQueued("注册成功");
-  });
-
-  ctx.command("anime.check").action(async ({ session }) => {
-    const result = anime_master.getScore(session.userId);
-    session.sendQueued(result.msg);
-  });
-
-  ctx
-    .command("anime.出题")
-    .option("ext", "-e [ext:string]")
-    .action(async ({ session, options }) => {
-      if (session.guildId) {
-        return "请通过私聊进行出题";
-      }
-
-      await anime_master.initQuesList();
-      const imageExtension = options.ext || cfg.defaultImageExtension;
-      const quesList = anime_master.quesList;
-      const user_id = session.event.user.id;
-
-      await session.sendQueued("请输入问题编号");
-      let filename = await session.prompt();
+    while (quesList.hasOwnProperty(filename)) {
+      await session.sendQueued("编号已存在 重新输入");
+      filename = await session.prompt();
       if (!filename) {
         return "time out";
       }
-      console.info(anime_master.quesList);
+    }
 
-      while (quesList.hasOwnProperty(filename)) {
-        await session.sendQueued("编号已存在 重新输入");
-        filename = await session.prompt();
-        if (!filename) {
-          return "time out";
-        }
-      }
+    await session.sendQueued("请输入角色名称");
+    const name = await session.prompt();
+    if (!name) {
+      return "time out";
+    }
 
-      await session.sendQueued("请输入角色名称");
-      const name = await session.prompt();
-      if (!name) {
-        return "time out";
-      }
+    await session.sendQueued("请发送谜面图片");
+    const ques = await session.prompt(60000);
+    if (!ques) {
+      return "time out";
+    }
 
-      await session.sendQueued("请发送谜面图片");
-      const ques = await session.prompt();
-      if (!ques) {
-        return "time out";
-      }
+    await session.sendQueued("请发送谜底图片");
+    const ans = await session.prompt(60000);
+    if (!ans) {
+      return "time out";
+    }
 
-      await session.sendQueued("请发送谜底图片");
-      const ans = await session.prompt();
-      if (!ans) {
+    await session.sendQueued("请输入提示-1(建议:角色特征或台词等)");
+    const hint_1 = await session.prompt();
+    if (!hint_1) {
+      return "time out";
+    }
+    await session.sendQueued("请输入提示-2(建议:角色登场作品等)");
+    const hint_2 = await session.prompt();
+    if (!hint_2) {
+      return "time out";
+    }
+    await session.sendQueued("请输入提示-3(建议:角色名称提示等)");
+    const hint_3 = await session.prompt();
+    if (!hint_3) {
+      return "time out";
+    }
+    let otherAnswers: string[] = [];
+    await session.sendQueued(
+      "请输入其他被认为是正确答案的名字 可持续输入 发送“end”以结束输入"
+    );
+    while (true) {
+      const otherName = await session.prompt();
+      if (!otherName) {
         return "time out";
       }
-
-      await session.sendQueued("请输入提示-1(建议:角色特征或台词等)");
-      const hint_1 = await session.prompt();
-      if (!hint_1) {
-        return "time out";
+      if (otherName == "end") {
+        break;
       }
-      await session.sendQueued("请输入提示-2(建议:角色登场作品等)");
-      const hint_2 = await session.prompt();
-      if (!hint_2) {
-        return "time out";
+      if (otherAnswers.includes(otherName) || otherName == name) {
+        await session.sendQueued("已有该答案");
+        continue;
       }
-      await session.sendQueued("请输入提示-3(建议:角色名称提示等)");
-      const hint_3 = await session.prompt();
-      if (!hint_3) {
-        return "time out";
-      }
-      let otherAnswers: string[] = [];
-      await session.sendQueued(
-        "请输入其他被认为是正确答案的名字 可持续输入 发送“end”以结束输入"
-      );
-      while (true) {
-        const otherName = await session.prompt();
-        if (!otherName) {
-          return "time out";
-        }
-        if (otherName == "end") {
-          break;
-        }
-        if (otherAnswers.includes(otherName) || otherName == name) {
-          await session.sendQueued("已有该答案");
-          continue;
-        }
-        otherAnswers.push(otherName);
-        await session.sendQueued("答案记录成功");
-      }
-      quesList[filename] = {
-        name: name,
-        id: filename,
-        auther: user_id,
-        hint_1: hint_1,
-        hint_2: hint_2,
-        hint_3: hint_3,
-        otherAnswers: otherAnswers,
-      };
-      console.log(quesList);
-      const save_ques = await anime_master.saveImage(
-        ques,
-        imageExtension,
-        "data/anime_master/ques",
-        filename
-      );
-      const save_ans = await anime_master.saveImage(
-        ans,
-        imageExtension,
-        "data/anime_master/ans",
-        filename
-      );
-      await session.sendQueued(
-        `谜面保存:${save_ques.msg} 谜底保存:${save_ans.msg}`
-      );
-      anime_master.quesSetStore(filename);
-      await session.sendQueued("出题成功");
-    });
+      otherAnswers.push(otherName);
+      await session.sendQueued("答案记录成功");
+    }
+    await session.sendQueued("请输入该问题分值([1]简单~[3]中等~[5]困难)");
+    var score = +(await session.prompt());
+    while (isNaN(score) || score < 1 || score > 5) {
+      await session.sendQueued("输入不合规 请重新输入");
+      score = +(await session.prompt());
+    }
+    quesList[filename] = {
+      name: name,
+      id: filename,
+      auther: user_id,
+      hint_1: hint_1,
+      hint_2: hint_2,
+      hint_3: hint_3,
+      otherAnswers: otherAnswers,
+      score: score,
+    };
+    console.log(quesList);
+    const save_ques = await anime_master.saveImage(
+      ques,
+      imageExtension,
+      "data/anime_master/ques",
+      filename
+    );
+    const save_ans = await anime_master.saveImage(
+      ans,
+      imageExtension,
+      "data/anime_master/ans",
+      filename
+    );
+    await session.sendQueued(
+      `谜面保存:${save_ques.msg} 谜底保存:${save_ans.msg}`
+    );
+    anime_master.quesSetStore(filename);
+    await session.sendQueued("出题成功");
+  });
 
   ctx.command("anime.update").action(async ({ session }) => {
     anime_master.initUserList();
@@ -457,11 +499,20 @@ export function apply(ctx: Context, cfg: Config) {
     await session.sendQueued("更新完成");
   });
 
-  ctx.command("anime.test").action(async ({ session }) => {
-    const ok = ["ok", "ooo"];
-    console.info([ok.toString()]);
-  });
+  ctx.command("anime.test").action(async ({ session }) => {});
 
+  ctx.command("anime.join").action(async ({ session }) => {
+    const player = session.userId;
+    console.info(current.players);
+    if (isstarted) {
+      return "一局游戏正在进行中 请等待游戏结束再加入";
+    }
+    if (player in current.players) {
+      return "您已在准备中了哦";
+    }
+    current.players[player] = 0;
+    return "已加入准备队列";
+  });
   ctx.middleware(async (session, next) => {
     if (isstarted) {
       const message = session.content.replace(/<at id="[^"]+"\/>/, "").trim();
