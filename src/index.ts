@@ -59,21 +59,21 @@ export function apply(ctx: Context, cfg: Config) {
   // );
 
   // 题库数据库实现
-  // ctx.model.extend(
-  //   "ani_mas_ques",
-  //   {
-  //     id: "unsigned",
-  //     qid: "string",
-  //     name: "string",
-  //     auther: "string",
-  //     hint_1: "string",
-  //     hint_2: "string",
-  //     hint_3: "string",
-  //     Other_ans: "list",
-  //     score: "integer",
-  //   },
-  //   { autoInc: true }
-  // );
+  ctx.model.extend(
+    "ani_mas_ques",
+    {
+      id: "unsigned",
+      qid: "string",
+      name: "string",
+      auther: "string",
+      hint_1: "string",
+      hint_2: "string",
+      hint_3: "string",
+      Other_ans: "list",
+      score: "integer",
+    },
+    { autoInc: true }
+  );
 
   // 日志输出
   const logger = ctx.logger("ani-mas");
@@ -102,9 +102,7 @@ export function apply(ctx: Context, cfg: Config) {
     async newGame(session: Session) {
       this.init();
       session.cancelQueued();
-      this.quesNames = JSON.parse(
-        (await ctx.localstorage.getItem("anime_master/questions")) || "[]"
-      );
+      this.quesNames = anime_master.quesList;
       if (this.quesNames.length == 0) {
         await session.sendQueued("题库里没有题哦，快去出题吧");
         return { code: false, msg: "空题库" };
@@ -127,14 +125,19 @@ export function apply(ctx: Context, cfg: Config) {
 
     async newQues(ques, session: Session) {
       session.cancelQueued();
-      this.question = anime_master.quesList[ques];
+      this.question = (
+        await ctx.database.get("ani_mas_ques", { qid: ques })
+      ).reduce((acc, item) => {
+        return { ...acc, ...item };
+      }, {});
+      console.info(this.question);
       this.hint_time = 0;
       const ques_img = path.join(
         ctx.baseDir,
         `data/anime_master/ques/${ques}.png`
       );
       await session.sendQueued([
-        `这是一道分值为${this.question["score"] * 3}的题`,
+        `这是一道分值为${this.question["score"] * 4}的题`,
         h("image", { url: "file:///" + ques_img }),
       ]);
       console.info(this.question);
@@ -145,16 +148,17 @@ export function apply(ctx: Context, cfg: Config) {
       const message = session.content.replace(/<at id="[^"]+"\/>/, "").trim();
       if (
         message == this.question.name ||
-        this.question.otherAnswers.includes(message)
+        this.question.Other_ans.includes(message)
       ) {
         await session.sendQueued([
           "回答正确",
+          `答案是:${this.question.name}`,
           h("image", {
             url:
               "file:///" +
               path.join(
                 ctx.baseDir,
-                `data/anime_master/ans/${this.question.id}.png`
+                `data/anime_master/ans/${this.question.qid}.png`
               ),
           }),
         ]);
@@ -167,6 +171,10 @@ export function apply(ctx: Context, cfg: Config) {
           await session.sendQueued(
             "啊欧 你好像是出题人呢 自己答自己的题不会得分哦"
           );
+        } else {
+          const score = this.question.score * (4 - this.hint_time);
+          this.players[session.userId] += score;
+          await session.sendQueued(`获得${score}分`);
         }
         await this.nextOrEnd(session);
       } else if (message == "hint" || message == "提示" || message == "不会") {
@@ -179,7 +187,7 @@ export function apply(ctx: Context, cfg: Config) {
                 "file:///" +
                 path.join(
                   ctx.baseDir,
-                  `data/anime_master/ans/${this.question.id}.png`
+                  `data/anime_master/ans/${this.question.qid}.png`
                 ),
             })
           );
@@ -216,57 +224,40 @@ export function apply(ctx: Context, cfg: Config) {
   };
   const anime_master = {
     userList: {},
-    quesList: {},
+    quesList: [],
 
     //初始化userlist
-    async initUserList() {
-      const data = JSON.parse(
-        (await ctx.localstorage.getItem("anime_master/all_user")) || "[]"
-      );
-      const userList = this.userList;
-      const dic = { success: 0, err: 0 };
-      const eventList = data.map((item) => {
-        return new Promise(async (resolve, reject) => {
-          try {
-            userList[item] = JSON.parse(
-              await ctx.localstorage.getItem(`anime_master/${item}`)
-            );
-            dic.success++;
-            resolve(true);
-          } catch (error) {
-            dic.err++;
-            reject(false);
-          }
-        });
-      });
-      await Promise.all(eventList);
-      console.info(`初始化完成 成功:${dic.success} 失败:${dic.err}`);
-      console.info("注册人数:" + eventList.length);
-    },
+    // async initUserList() {
+    //   const data = JSON.parse(
+    //     (await ctx.localstorage.getItem("anime_master/all_user")) || "[]"
+    //   );
+    //   const userList = this.userList;
+    //   const dic = { success: 0, err: 0 };
+    //   const eventList = data.map((item) => {
+    //     return new Promise(async (resolve, reject) => {
+    //       try {
+    //         userList[item] = JSON.parse(
+    //           await ctx.localstorage.getItem(`anime_master/${item}`)
+    //         );
+    //         dic.success++;
+    //         resolve(true);
+    //       } catch (error) {
+    //         dic.err++;
+    //         reject(false);
+    //       }
+    //     });
+    //   });
+    //   await Promise.all(eventList);
+    //   console.info(`初始化完成 成功:${dic.success} 失败:${dic.err}`);
+    //   console.info("注册人数:" + eventList.length);
+    // },
 
     async initQuesList() {
-      const data = JSON.parse(
-        (await ctx.localstorage.getItem("anime_master/questions")) || "[]"
+      this.quesList = (await ctx.database.get("ani_mas_ques", {}, ["qid"])).map(
+        (item) => item.qid
       );
-      const quesList = this.quesList;
-      const dic = { success: 0, err: 0 };
-      const eventList = data.map((item) => {
-        return new Promise(async (resolve, reject) => {
-          try {
-            quesList[item] = JSON.parse(
-              await ctx.localstorage.getItem(`anime_master/ques/${item}`)
-            );
-            dic.success++;
-            resolve(true);
-          } catch (error) {
-            dic.err++;
-            reject(false);
-          }
-        });
-      });
-      await Promise.all(eventList);
-      console.info(`题库加载 成功:${dic.success} 失败:${dic.err}`);
-      console.info("题目数量:" + eventList.length);
+
+      console.info(this.quesList);
     },
 
     checkAndCreateUserInfo(userId) {
@@ -286,27 +277,27 @@ export function apply(ctx: Context, cfg: Config) {
       };
     },
 
-    async userSetStore(userId) {
-      await ctx.localstorage.setItem(
-        "anime_master/all_user",
-        JSON.stringify(Object.keys(this.userList))
-      );
-      await ctx.localstorage.setItem(
-        `anime_master/${userId}`,
-        JSON.stringify(this.userList[userId])
-      );
-    },
+    // async userSetStore(userId) {
+    //   await ctx.localstorage.setItem(
+    //     "anime_master/all_user",
+    //     JSON.stringify(Object.keys(this.userList))
+    //   );
+    //   await ctx.localstorage.setItem(
+    //     `anime_master/${userId}`,
+    //     JSON.stringify(this.userList[userId])
+    //   );
+    // },
 
-    async quesSetStore(quesId) {
-      await ctx.localstorage.setItem(
-        "anime_master/questions",
-        JSON.stringify(Object.keys(this.quesList))
-      );
-      await ctx.localstorage.setItem(
-        `anime_master/ques/${quesId}`,
-        JSON.stringify(this.quesList[quesId])
-      );
-    },
+    // async quesSetStore(quesId) {
+    //   await ctx.localstorage.setItem(
+    //     "anime_master/questions",
+    //     JSON.stringify(Object.keys(this.quesList))
+    //   );
+    //   await ctx.localstorage.setItem(
+    //     `anime_master/ques/${quesId}`,
+    //     JSON.stringify(this.quesList[quesId])
+    //   );
+    // },
 
     async saveImage(
       imageStr: string,
@@ -355,7 +346,7 @@ export function apply(ctx: Context, cfg: Config) {
 
   // 插件启动时自动初始化
   ctx.on("ready", () => {
-    anime_master.initUserList();
+    // anime_master.initUserList();
     anime_master.initQuesList();
   });
 
@@ -388,14 +379,13 @@ export function apply(ctx: Context, cfg: Config) {
     await anime_master.initQuesList();
     const imageExtension = "png";
     const quesList = anime_master.quesList;
-    const user_id = session.event.user.id;
+    const user_id = session.userId;
 
     await session.sendQueued("请输入问题编号");
     let filename = await session.prompt();
     if (!filename) {
       return "time out";
     }
-    console.info(anime_master.quesList);
 
     while (quesList.hasOwnProperty(filename)) {
       await session.sendQueued("编号已存在 重新输入");
@@ -463,16 +453,26 @@ export function apply(ctx: Context, cfg: Config) {
       await session.sendQueued("输入不合规 请重新输入");
       score = +(await session.prompt());
     }
-    quesList[filename] = {
+    // quesList[filename] = {
+    //   name: name,
+    //   id: filename,
+    //   auther: user_id,
+    //   hint_1: hint_1,
+    //   hint_2: hint_2,
+    //   hint_3: hint_3,
+    //   otherAnswers: otherAnswers,
+    //   score: score,
+    // };
+    ctx.database.create("ani_mas_ques", {
+      qid: filename,
       name: name,
-      id: filename,
       auther: user_id,
       hint_1: hint_1,
       hint_2: hint_2,
       hint_3: hint_3,
-      otherAnswers: otherAnswers,
+      Other_ans: otherAnswers,
       score: score,
-    };
+    });
     console.log(quesList);
     const save_ques = await anime_master.saveImage(
       ques,
@@ -489,12 +489,12 @@ export function apply(ctx: Context, cfg: Config) {
     await session.sendQueued(
       `谜面保存:${save_ques.msg} 谜底保存:${save_ans.msg}`
     );
-    anime_master.quesSetStore(filename);
+    // anime_master.quesSetStore(filename);
     await session.sendQueued("出题成功");
   });
 
   ctx.command("anime.update").action(async ({ session }) => {
-    anime_master.initUserList();
+    // anime_master.initUserList();
     anime_master.initQuesList();
     await session.sendQueued("更新完成");
   });
