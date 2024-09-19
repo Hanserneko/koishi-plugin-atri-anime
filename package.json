@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-atri-anime",
-  "description": "atri动漫高手 开发中",
-  "version": "0.0.5",
+  "description": "atri-动漫高手 可自行出题管理题库的游戏插件",
+  "version": "1.0.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -9,16 +9,29 @@
     "dist"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/Hanserneko/koishi-plugin-atri-anime",
+  "author": {
+    "name": "hanser_no_neko",
+    "email": "rikowodo1989@gmail.com"
+  },
   "repository": {
     "type": "git",
-
-    "url": "https://github.com/Hanserneko/koishi-plugin-atri-anime"
+    "url": "git + https://github.com/Hanserneko/koishi-plugin-atri-anime.git"
   },
   "keywords": [
     "chatbot",
     "koishi",
-    "plugin"
+    "plugin",
+    "atri",
+    "anime"
   ],
+  "koishi": {
+    "service": {
+      "required": [
+        "database"
+      ]
+    }
+  },
   "peerDependencies": {
     "koishi": "^4.17.6"
   }
