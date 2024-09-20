@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-atri-anime",
   "description": "atri-动漫高手 可自行出题管理题库的游戏插件",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [

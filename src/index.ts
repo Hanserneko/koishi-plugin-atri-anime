@@ -367,7 +367,24 @@ export function apply(ctx: Context, cfg: Config) {
   ctx.on("ready", () => {
     anime_master.initQuesList();
   });
+  ctx.command("anime").usage(`可自己出题自己控制题库的动漫高手游戏插件
+- **指令: anime.start**
+    别名:开始游戏
+    开始一局游戏
+- **指令: anime.end**
+    别名:结束游戏
+    结束已经开始的游戏
+- **指令: anime.set**
+    别名:出题
+    为游戏出题 仅可在私聊使用
+- **指令: anime.reg**
+    别名:注册群聊
+    在群聊中开始游戏前需要注册群聊以记录游戏状态
+- **指令: anime.delete**
+    删除自己出过的题 还未实现
 
+**注意:游戏开始后会占用消息队列 请开始游戏后务必结束游戏在使用其他命令
+`);
   ctx
     .command("anime.start")
     .alias("开始游戏")
