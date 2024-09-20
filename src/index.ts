@@ -387,11 +387,6 @@ export function apply(ctx: Context, cfg: Config) {
 
       if (is_start.map((item) => item.is_start)[0]) return "游戏正在进行中";
 
-      await ctx.database.set(
-        "ani_mas_groups",
-        { group_id: session.guildId },
-        { is_start: true }
-      );
       session.cancelQueued();
       await anime_master.initQuesList();
       await current.newGame(session);
